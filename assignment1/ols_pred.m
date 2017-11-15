@@ -4,6 +4,8 @@ nbr_of_obs = length(ParanaObs(:,5)); % number of observation
 nbr_of_valid_data = 60; % number of observation use for validation
 valid_data_ind = randperm(nbr_of_obs,nbr_of_valid_data); % indices of observations that will be used for validation
 train_indices = ~ismember(1:nbr_of_obs,valid_data_ind); % indices of observations used for training model
+nbr_grid = length(ParanaGrid(:,1)); % number of points in grid
+nbr_train = nbr_of_obs - nbr_of_valid_data;
 
 % observed data
 long_obs = ParanaObs(:,1);
@@ -26,53 +28,52 @@ precip_valid = precip_obs(valid_data_ind);
 % regression to estimate unknown parameters of our model (the model is that
 % the precipitation depends linearly on longitude, latitude and distance to
 % coast)
-X = [ones(nbr_of_obs-nbr_of_valid_data,1) long_train lat_train dist_to_coast_train];
-beta = regress(precip_train,X);
+X_k = [ones(nbr_train,1) long_train lat_train dist_to_coast_train];
+beta = regress(precip_train,X_k);
 
 % interpolation of precipitation on the grid 
-X0 = [ones(length(ParanaGrid(:,1)),1) ParanaGrid(:,1) ParanaGrid(:,2) ParanaGrid(:,4)];
-Y_pred = X0*beta;
+X_u = [ones(nbr_grid,1) ParanaGrid(:,1) ParanaGrid(:,2) ParanaGrid(:,4)];
+Y_pred_ols = X_u*beta;
+
+err = precip_train - X_k*beta; % residuals
+sigma_2_hat = norm(err)^2/(nbr_train-3);
+v_beta = (X_k'*X_k)\(eye(4)*sigma_2_hat);
+
+v_mu_ols = sum((X_u*v_beta).*X_u,2); 
+v_pred_ols = sigma_2_hat + v_mu_ols; % variance of predicted points
+
+
+nbr_itr = 100; % number of permutation for bootstrap
+D = distance_matrix([long_train,lat_train]);
+Dmax = max(D(:))/2;
+Kmax = 100;
+R = zeros(nbr_itr,Kmax+1);
+[rhat,s2hat,m,n,d]=covest_nonparametric(D,err,Kmax,Dmax); % binned ls
+
+% bootstrap
+for i = 1:nbr_itr
+    random_permutation = randperm(length(long_train));
+    err_temp = err(random_permutation);
+   
+    % estimate the covariance function using binned least squares
+    [rhat_b,s2hat_b,m_b,n_b,d_b]=covest_nonparametric(D,err_temp,Kmax,Dmax);
+    R(i,:) = rhat_b;
+end
+Q = quantile(R,0.95,1);
+
+%% Plots
+
+% reconstructed percipitation using ols
+imagesc(reshape(Y_pred_ols,sz))
+
+% variance of the predicted points for ols
 figure
-imagesc(reshape(Y_pred,sz))
+imagesc(reshape(v_pred_ols,sz))
 
-err = precip_train - X*beta; % residuals
-sigma_2_hat = norm(err)^2/(length(err)-3);
-v_beta = (X'*X)\(eye(4)*sigma_2_hat);
-
-v_mu_1 = sum((X0*v_beta).*X0,2); 
-v_mu_2 = sum((X*v_beta).*X,2);
-v_pred_1 = sigma_2_hat + v_mu_1; % variance of predicted points
-v_pred_2 = sigma_2_hat + v_mu_2; % variance of observed training points
+% covariance function using binned ls
 figure
-imagesc(reshape(v_pred_1,sz))
-% scatter(ParanaGrid(:,1), ParanaGrid(:,2),10, sqrt(v_pred_1), 'filled')
-% hold on
-% scatter(long_train, lat_train,10, sqrt(v_pred_2), 'filled')
+plot(d,rhat,'o',0,s2hat,'o')
+hold on
+plot(d,Q)
 
 
-% nbr_itr = 10; % number of permutation for bootstrap
-% Dmax = 0;
-% 
-% for i = 1:nbr_itr
-%     random_permutation = randi(length(long_train),length(long_train),1);
-%     
-%     % permute known data randomly and compute percipitation at the
-%     % locations where precipitation have been measured
-%     Y_pred = [ones(nbr_of_obs-nbr_of_valid_data,1) long_train(random_permutation) ...
-%         lat_train(random_permutation) dist_to_coast_train(random_permutation)]*beta; 
-%     % figure
-%     % scatter(long_obs(random_permutation), lat_obs(random_permutation),20, Y_pred)
-% 
-%     err = precip_train(random_permutation)-Y_pred; % residuals
-% 
-%     D = distance_matrix([long_train(random_permutation),lat_train(random_permutation)]);
-% 
-%     % estimate the covariance function using binned least squares
-%     Kmax = 500;
-%     if Dmax == 0
-%         Dmax = max(D(:))/2;
-%     end
-%     [rhat,s2hat,m,n,d]=covest_nonparametric(D,err,Kmax,Dmax);
-%     figure
-%     plot(d,rhat,'o',0,s2hat,'ro')
-% end

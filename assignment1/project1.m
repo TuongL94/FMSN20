@@ -43,13 +43,33 @@ X_k = [ones(nbr_train,1) long_train lat_train dist_to_coast_train];
 X_u = [ones(nbr_grid,1) long_grid lat_grid dist_to_coast_grid];
 y_pred_ols = X_u*beta;
 
-%% kriging
-D_train = distance_matrix([long_train lat_train]);
-z = precip_train - X_k*beta;
+err = precip_train - X_k*beta; % residuals
 
-Kmax = 500;
-Dmax = 4;
-[rhat,s2hat,m,n,d] = covest_nonparametric(D_train,z,Kmax, Dmax);
+sigma_eps_2_hat = norm(err)^2/(nbr_train-3);
+v_beta = (X_k'*X_k)\(eye(4)*sigma_eps_2_hat);
+v_mu_ols = sum((X_u*v_beta).*X_u,2); 
+v_pred_ols = sigma_eps_2_hat + v_mu_ols; % variance of predicted points
+
+nbr_itr = 100; % number of permutation for bootstrap
+D_train = distance_matrix([long_train,lat_train]);
+Dmax = max(D_train(:))/2;
+Kmax = 100;
+R = zeros(nbr_itr,Kmax+1);
+[rhat,s2hat,m,n,d]=covest_nonparametric(D_train,err,Kmax,Dmax); % binned ls
+
+% bootstrap
+for i = 1:nbr_itr
+    random_permutation = randperm(length(long_train));
+    err_temp = err(random_permutation);
+   
+    % estimate the covariance function using binned least squares
+    [rhat_b,s2hat_b,m_b,n_b,d_b]=covest_nonparametric(D_train,err_temp,Kmax,Dmax);
+    R(i,:) = rhat_b;
+end
+Q = quantile(R,0.95,1);
+
+%% universal kriging
+z = precip_train - X_k*beta;
 
 par = covest_ml(D_train, z);
 sigma2 = par(1);
@@ -77,28 +97,41 @@ v_pred = diag(Sigma_uu - (Sigma_uk*(Sigma_kk\Sigma_ku)));
 
 %% plots
 
-%ols
+% reconstructed percipitation using ols
 figure
-imagesc(reshape(y_pred_ols,sz))
-
-%kriging
-figure
-imagesc(reshape(y_rec(nbr_train+1:end),sz));
-axis xy tight
+imagesc('XData',long_grid,'YData',lat_grid,'CData',reshape(y_pred_ols,sz))
+plotBorder(Border);
 colorbar
 
+% variance of the predicted points for ols
 figure
-imagesc(reshape(sqrt(v_pred),sz));
+imagesc('XData',long_grid,'YData',lat_grid,'CData',reshape(v_pred_ols,sz))
+plotBorder(Border);
 colorbar
 
-%% covariances
+% reconstructed percipitation using universal kriging
+figure
+imagesc('XData',long_grid,'YData',lat_grid,'CData',reshape(y_rec(nbr_train+1:end),sz));
+plotBorder(Border);
+colorbar
 
-%nonparametric
+% variance of the predicted points for universal kriging
+figure
+imagesc('XData',long_grid,'YData',lat_grid,'CData',reshape(sqrt(v_pred),sz));
+plotBorder(Border);
+colorbar
+
+% nonparametric covariance estimation
 figure
 plot(d,rhat,'o',0,s2hat,'ro')
 
-%parametric
 hold on
 x = 0:0.01:4;
-plot(x,matern_covariance(x, sigma2, kappa, nu), 'r');
+plot(x,matern_covariance(x, sigma2, kappa, nu), 'r'); % parametric covariance estimation (maximum likelihood)
+plot(d,Q,'g') % 95% quantiles from bootstrap
 hold off
+
+% validation data
+figure
+scatter(long_valid,lat_valid, 20, precip_valid,'filled')
+colorbar
