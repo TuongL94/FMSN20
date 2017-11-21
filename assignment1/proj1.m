@@ -69,9 +69,8 @@ end
 Q = quantile(R,0.95,1);
 
 %% universal kriging
-z = precip_train - X_k*beta;
 
-par = covest_ml(D_train, z);
+[par,beta_ml]=covest_ml(D_train, precip_train, 'matern', [],X_k);
 sigma2 = par(1);
 kappa = par(2);
 nu = par(3);
@@ -89,37 +88,68 @@ Sigma_uu = Sigma_yy(nbr_train+1:end, nbr_train+1:end);
 y_k = precip_train;
 y_rec = nan(nbr_train+nbr_grid,1);
 y_rec(1:nbr_train) = y_k;
-mu_k = X_k*beta;
-mu_u = X_u*beta;
+mu_k = X_k*beta_ml;
+mu_u = X_u*beta_ml;
 y_rec(nbr_train+1:end) = mu_u + Sigma_uk*(Sigma_kk\(y_k - mu_k));
 
-v_pred = diag(Sigma_uu - (Sigma_uk*(Sigma_kk\Sigma_ku)));
+v_pred = diag(Sigma_uu - (Sigma_uk*(Sigma_kk\Sigma_ku)) + ... 
+    (X_u'-X_k'*(Sigma_kk\Sigma_ku))'*(X_k'*(Sigma_kk\X_k)\(X_u'-X_k'*(Sigma_kk\Sigma_ku))));
+
+%% Comparison of ols and universal kriging
+
+X_valid = [ones(nbr_of_valid_data,1) long_valid lat_valid dist_to_coast_valid];
+y_ols_valid = X_valid*beta;
+valid_err_ols = norm(precip_valid - y_ols_valid);
+
+D_train_valid = distance_matrix([long_train lat_train; long_valid lat_valid]);
+Sigma_v = matern_covariance(D_train_valid, sigma2, kappa, nu);
+
+Sigma_yy_v = Sigma_v + sigma2_epsilon*eye(size(Sigma_v));
+Sigma_kk_v = Sigma_yy_v(1:nbr_train, 1:nbr_train);
+Sigma_uk_v = Sigma_yy_v(nbr_train+1:end, 1:nbr_train);
+Sigma_ku_v = Sigma_uk_v';
+Sigma_uu_v = Sigma_yy_v(nbr_train+1:end, nbr_train+1:end);
+
+y_rec_valid = nan(nbr_train+nbr_of_valid_data,1);
+y_rec_valid(1:nbr_train) = y_k;
+mu_u = X_valid*beta_ml;
+y_rec_valid(nbr_train+1:end) = mu_u + Sigma_uk_v*(Sigma_kk_v\(y_k - mu_k));
+
+valid_err_kriging = norm(precip_valid - y_rec_valid(nbr_train+1:end));
 
 %% plots
 
-% reconstructed percipitation using ols
+% reconstructed precipitation using ols
 figure
 imagesc('XData',long_grid,'YData',lat_grid,'CData',reshape(y_pred_ols,sz))
 plotBorder(Border);
 colorbar
+xlabel('longitude')
+ylabel('latitude')
 
 % variance of the predicted points for ols
 figure
 imagesc('XData',long_grid,'YData',lat_grid,'CData',reshape(v_pred_ols,sz))
 plotBorder(Border);
 colorbar
+xlabel('longitude')
+ylabel('latitude')
 
-% reconstructed percipitation using universal kriging
+% reconstructed precipitation using universal kriging
 figure
 imagesc('XData',long_grid,'YData',lat_grid,'CData',reshape(y_rec(nbr_train+1:end),sz));
 plotBorder(Border);
 colorbar
+xlabel('longitude')
+ylabel('latitude')
 
 % variance of the predicted points for universal kriging
 figure
 imagesc('XData',long_grid,'YData',lat_grid,'CData',reshape(sqrt(v_pred),sz));
 plotBorder(Border);
 colorbar
+xlabel('longitude')
+ylabel('latitude')
 
 % nonparametric covariance estimation
 figure
@@ -128,10 +158,15 @@ plot(d,rhat,'o',0,s2hat,'ro')
 hold on
 x = 0:0.01:4;
 plot(x,matern_covariance(x, sigma2, kappa, nu), 'r'); % parametric covariance estimation (maximum likelihood)
-plot(d,Q,'g') % 95% quantiles from bootstrap
+plot(d,Q,'k') % 95% quantiles from bootstrap
 hold off
+xlabel('h')
+ylabel('r(h)')
 
 % validation data
 figure
 scatter(long_valid,lat_valid, 20, precip_valid,'filled')
 colorbar
+plotBorder(Border);
+xlabel('longitude')
+ylabel('latitude')
